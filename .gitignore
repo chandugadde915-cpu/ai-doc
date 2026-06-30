@@ -1,0 +1,27 @@
+# secrets
+.env
+.env.local
+.env.*.local
+
+# node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# python / backend
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# heavy local-only docling deps (not used in production - see backend/Dockerfile)
+.docling-deps/
+
+# misc
+.DS_Store
+work/
+outputs/*
+!outputs/.gitkeep

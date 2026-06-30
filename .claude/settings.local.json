@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(npm start *)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(lsof -i :3000 -sTCP:LISTEN)",
+      "Bash(curl -s -o /dev/null -w \"GET / -> %{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"GET /styles.css -> %{http_code}\\\\n\" http://localhost:3000/styles.css)",
+      "Bash(python3 -c \"import reportlab\")",
+      "Bash(python3 -c \"import PIL; print\\(PIL.__version__\\)\")",
+      "Bash(curl -s -o /dev/null -w \"GET /app.js -> %{http_code}\\\\n\" http://localhost:3000/app.js)",
+      "Bash(node --check /Users/tagoreyarlagadda/Documents/Codex/2026-06-29/i-want-to-create-a-working/public/app.js)",
+      "WebSearch",
+      "Bash(npx oxlint *)",
+      "Bash(npx vite *)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(base64 -i /tmp/bad-phone-photo.png | tr -d '\\\\n' > /tmp/bad-photo-b64.txt *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('document_pipeline.py'\\).read\\(\\)\\)\")"
+    ]
+  }
+}

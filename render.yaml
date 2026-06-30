@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ai-document-intelligence-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false # set manually in the Render dashboard - never commit real keys
+      - key: OPENAI_MODEL
+        value: gpt-5.5
+      - key: OPENAI_REPAIR_MODEL
+        value: gpt-5.4-mini
+      - key: CORS_ORIGINS
+        sync: false # set to your Vercel frontend URL(s), comma-separated, after the first deploy

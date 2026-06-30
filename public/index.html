@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Document Intelligence</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace" aria-label="AI Document Intelligence">
+        <aside class="side-panel">
+          <div>
+            <p class="eyebrow">AI Document Intelligence</p>
+            <h1>Input</h1>
+            <p class="intro">
+              Upload a document and the system will OCR it, read its layout, classify it dynamically, and return structured JSON.
+            </p>
+          </div>
+
+          <form id="uploadForm" class="upload-form">
+            <label id="dropZone" class="drop-zone" for="fileInput">
+              <input id="fileInput" name="file" type="file" accept=".png,.jpg,.jpeg,.webp,.heic,.tif,.tiff,.pdf,.ppt,.pptx" />
+              <span class="drop-icon" aria-hidden="true">↑</span>
+              <span class="drop-title">Drop a file here or click to browse</span>
+              <span class="drop-detail">Images, scans, and PDFs supported</span>
+              <span class="drop-formats">
+                <span class="format-chip">PNG</span>
+                <span class="format-chip">JPG</span>
+                <span class="format-chip">PDF</span>
+                <span class="format-chip">HEIC</span>
+                <span class="format-chip">TIFF</span>
+              </span>
+            </label>
+
+            <div id="filePreview" class="file-preview hidden"></div>
+
+            <button id="submitButton" class="primary-button" type="submit">
+              <span class="button-icon" aria-hidden="true">→</span>
+              Analyze document
+            </button>
+          </form>
+
+          <section class="source-panel">
+            <div class="panel-heading">
+              <p class="eyebrow">Source data</p>
+              <span id="sourceStatus">Waiting for upload</span>
+            </div>
+            <div class="source-tabs" role="tablist" aria-label="Source viewer modes">
+              <button class="source-tab is-active" type="button" data-source-view="preview">Preview</button>
+              <button class="source-tab" type="button" data-source-view="text">OCR text</button>
+              <button class="source-tab" type="button" data-source-view="layout">Layout</button>
+            </div>
+            <div id="zoomToolbar" class="zoom-toolbar hidden">
+              <button type="button" id="zoomOutBtn" title="Zoom out">-</button>
+              <span id="zoomLevel">100%</span>
+              <button type="button" id="zoomInBtn" title="Zoom in">+</button>
+              <button type="button" id="zoomFitBtn" title="Fit to view">Fit</button>
+              <button type="button" id="zoomResetBtn" title="Reset zoom">100%</button>
+              <button type="button" id="expandPreviewBtn" class="expand-button" title="Open full screen">⤢ Expand</button>
+              <span class="zoom-hint">Scroll to zoom · drag to pan</span>
+            </div>
+            <div id="sourcePreviewSurface" class="source-preview-surface">
+              <div class="input-placeholder">
+                <span class="input-placeholder-icon" aria-hidden="true">SRC</span>
+                <strong>No document selected</strong>
+                <span>The document preview, OCR transcript, and layout JSON appear here.</span>
+              </div>
+            </div>
+            <dl id="sourceMetaGrid" class="source-meta-grid hidden"></dl>
+          </section>
+
+          <div class="status-strip">
+            <span id="apiStatus" class="status-dot"></span>
+            <span id="apiStatusText">Checking backend...</span>
+          </div>
+        </aside>
+
+        <section class="result-panel">
+          <div id="emptyState" class="empty-state">
+            <div class="empty-mark" aria-hidden="true">AI</div>
+            <h2>Output</h2>
+            <p>The model result will appear on the right as structured data, entities, key-value pairs, and tables.</p>
+          </div>
+
+          <div id="loadingState" class="loading-state hidden" aria-live="polite">
+            <div class="loader"></div>
+            <h2>Reading document</h2>
+            <p>Running OCR, building layout data, and sending the payload to the model.</p>
+          </div>
+
+          <div id="errorState" class="error-state hidden" role="alert"></div>
+
+          <article id="resultCard" class="result-card hidden">
+            <header class="result-header">
+              <div>
+                <p class="eyebrow">Extracted data</p>
+                <h2 id="resultType">Document</h2>
+              </div>
+              <div class="result-badges">
+                <span id="confidenceBadge" class="confidence-badge accuracy-badge">Accuracy 0%</span>
+                <span id="qualityBadge" class="confidence-badge quality-badge">Extraction quality 0%</span>
+                <span id="reviewBadge" class="confidence-badge review-badge">Review status</span>
+              </div>
+            </header>
+
+            <div class="edit-toolbar">
+              <span id="editStatus" class="edit-status">Click any value to edit it</span>
+              <div class="edit-actions">
+                <button type="button" id="resetEditsBtn" class="ghost-button">Reset edits</button>
+                <button type="button" id="copyJsonBtn" class="ghost-button">Copy JSON</button>
+                <button type="button" id="downloadJsonBtn" class="primary-button small-button">Download corrected JSON</button>
+              </div>
+            </div>
+
+            <section class="output-section">
+              <h3>Entities</h3>
+              <div id="entitiesGrid" class="data-grid"></div>
+            </section>
+
+            <section class="output-section">
+              <h3>Key-value pairs</h3>
+              <div id="keyValueGrid" class="data-grid"></div>
+            </section>
+
+            <section class="output-section">
+              <h3>Tables</h3>
+              <div id="tablesList" class="tables-list"></div>
+            </section>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <div id="previewLightbox" class="preview-lightbox hidden">
+      <div class="lightbox-toolbar">
+        <span id="lightboxFilename">Document preview</span>
+        <div class="lightbox-zoom-controls">
+          <button type="button" id="lbZoomOutBtn" title="Zoom out">-</button>
+          <span id="lbZoomLevel">100%</span>
+          <button type="button" id="lbZoomInBtn" title="Zoom in">+</button>
+          <button type="button" id="lbZoomFitBtn" title="Fit to view">Fit</button>
+          <button type="button" id="closeLightboxBtn" class="expand-button" title="Close (Esc)">✕ Close</button>
+        </div>
+      </div>
+      <div id="lightboxViewport" class="zoom-viewport lightbox-viewport"></div>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
