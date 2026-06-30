@@ -21,9 +21,17 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 app = FastAPI(title="AI Document Intelligence")
 
+def _parse_cors_origins(raw: str) -> list[str]:
+    # Strip whitespace and trailing slashes per entry - "https://a.com, https://b.com/" with a
+    # stray space or trailing slash silently fails to match the browser's Origin header otherwise,
+    # which is indistinguishable from "not set" when debugging from the outside.
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(","),
+    allow_origins=_parse_cors_origins(os.environ.get("CORS_ORIGINS", "http://localhost:5173")),
+    allow_origin_regex=r"https://.*\.vercel\.app",  # covers Vercel preview-deployment URLs too
     allow_methods=["*"],
     allow_headers=["*"],
 )
