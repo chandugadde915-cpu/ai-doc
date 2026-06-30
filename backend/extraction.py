@@ -166,34 +166,20 @@ async def extract_structured_data(pipeline: PipelineResult, mode: str, source_da
     parsed = await request_structured_json(SYSTEM_PROMPT, user_content, primary_model)
     models_used = {primary_model}
 
+    # Single combined repair call instead of two repair types x two model tiers (was up to 4 extra
+    # calls per document). Uses the same model tier already chosen for the primary call - that tier
+    # was selected to match this document's quality, so re-using it for repair costs no accuracy,
+    # it just stops paying for a separate cheap-then-strong escalation on top of the escalation
+    # the primary model selection already did.
     incomplete_tables = find_incomplete_tables(parsed.get("tables"))
-    if incomplete_tables and visual_pages:
-        repaired = await repair_incomplete_tables(parsed, incomplete_tables, visual_pages, OPENAI_REPAIR_MODEL)
-        if repaired is not None:
-            parsed["tables"] = repaired
-        models_used.add(OPENAI_REPAIR_MODEL)
+    incomplete_pairs = find_incomplete_key_value_pairs(parsed.get("key_value_pairs")) if quality["tier"] != "high" else []
 
-        incomplete_tables = find_incomplete_tables(parsed.get("tables"))
-        if incomplete_tables and OPENAI_REPAIR_MODEL != OPENAI_MODEL:
-            escalated = await repair_incomplete_tables(parsed, incomplete_tables, visual_pages, OPENAI_MODEL)
-            if escalated is not None:
-                parsed["tables"] = escalated
-            models_used.add(OPENAI_MODEL)
-
-    if quality["tier"] != "high":
-        incomplete_pairs = find_incomplete_key_value_pairs(parsed.get("key_value_pairs"))
-        if incomplete_pairs and visual_pages:
-            repaired = await repair_incomplete_key_value_pairs(parsed, incomplete_pairs, visual_pages, OPENAI_REPAIR_MODEL)
-            if repaired is not None:
-                parsed["key_value_pairs"] = repaired
-            models_used.add(OPENAI_REPAIR_MODEL)
-
-            incomplete_pairs = find_incomplete_key_value_pairs(parsed.get("key_value_pairs"))
-            if incomplete_pairs and OPENAI_REPAIR_MODEL != OPENAI_MODEL:
-                escalated = await repair_incomplete_key_value_pairs(parsed, incomplete_pairs, visual_pages, OPENAI_MODEL)
-                if escalated is not None:
-                    parsed["key_value_pairs"] = escalated
-                models_used.add(OPENAI_MODEL)
+    if (incomplete_tables or incomplete_pairs) and visual_pages:
+        repaired = await repair_incomplete_fields(parsed, incomplete_tables, incomplete_pairs, visual_pages, primary_model)
+        if repaired.get("tables") is not None:
+            parsed["tables"] = repaired["tables"]
+        if repaired.get("key_value_pairs") is not None:
+            parsed["key_value_pairs"] = repaired["key_value_pairs"]
 
     parsed["__quality"] = {"tier": quality["tier"], "reason": quality["reason"], "modelsUsed": sorted(models_used)}
     return parsed
@@ -274,45 +260,6 @@ def find_incomplete_tables(tables: Any) -> list[int]:
     return indexes
 
 
-async def repair_incomplete_tables(parsed: dict[str, Any], incomplete_indexes: list[int], visual_pages: list[dict[str, Any]], model: str) -> list[Any] | None:
-    tables_to_fix = [{"index": i, "table": parsed["tables"][i]} for i in incomplete_indexes]
-
-    repair_prompt = """You are correcting incomplete tables extracted from a document.
-
-You will be given the page images and a JSON list of tables that have missing or short rows.
-Re-read every row directly from the image, cell by cell, including small print in rate/qty/tax/amount columns.
-Return ONLY a JSON object: { "tables": [ { "index": 0, "columns": ["string"], "rows": [["string"]] } ] }
-Every row array must have exactly the same length as "columns". Use "" only for cells that are genuinely blank in the source. Never shorten or omit a row."""
-
-    repair_content: list[dict[str, Any]] = [{"type": "input_text", "text": f"Tables that need correction:\n{json.dumps(tables_to_fix, indent=2)}"}]
-
-    needed_pages = {t["table"].get("page") for t in tables_to_fix if t["table"].get("page")}
-    pages_to_send = [p for p in visual_pages if p["page"] in needed_pages] if needed_pages else visual_pages[:2]
-
-    for page in pages_to_send:
-        if not page.get("dataUrl"):
-            continue
-        repair_content.append({"type": "input_text", "text": f"Rendered page {page.get('page', 1)}"})
-        repair_content.append({"type": "input_image", "image_url": page["dataUrl"]})
-
-    try:
-        result = await request_structured_json(repair_prompt, repair_content, model)
-        fixed_tables = result.get("tables") if isinstance(result.get("tables"), list) else []
-        updated = list(parsed["tables"])
-        for fixed in fixed_tables:
-            index = fixed.get("index")
-            if not isinstance(index, int) or index >= len(updated):
-                continue
-            updated[index] = {
-                **updated[index],
-                "columns": fixed.get("columns") if isinstance(fixed.get("columns"), list) else updated[index].get("columns"),
-                "rows": fixed.get("rows") if isinstance(fixed.get("rows"), list) else updated[index].get("rows"),
-            }
-        return updated
-    except Exception:
-        return None
-
-
 def find_incomplete_key_value_pairs(pairs: Any) -> list[int]:
     if not isinstance(pairs, list):
         return []
@@ -327,18 +274,43 @@ def find_incomplete_key_value_pairs(pairs: Any) -> list[int]:
     return indexes
 
 
-async def repair_incomplete_key_value_pairs(parsed: dict[str, Any], incomplete_indexes: list[int], visual_pages: list[dict[str, Any]], model: str) -> list[Any] | None:
-    pairs_to_fix = [{"index": i, "pair": parsed["key_value_pairs"][i]} for i in incomplete_indexes]
+async def repair_incomplete_fields(
+    parsed: dict[str, Any],
+    incomplete_table_indexes: list[int],
+    incomplete_pair_indexes: list[int],
+    visual_pages: list[dict[str, Any]],
+    model: str,
+) -> dict[str, Any]:
+    """One combined repair call for both incomplete tables and incomplete key-value pairs, instead
+    of two separate repair types each retried at two model tiers. Cuts the worst case from 4 extra
+    calls per document down to 1."""
+    tables_to_fix = [{"index": i, "table": parsed["tables"][i]} for i in incomplete_table_indexes]
+    pairs_to_fix = [{"index": i, "pair": parsed["key_value_pairs"][i]} for i in incomplete_pair_indexes]
 
-    repair_prompt = """You are correcting incomplete key-value pairs extracted from a document.
+    repair_prompt = """You are correcting incomplete data extracted from a document.
 
-You will be given the page images and a JSON list of labels whose values were missed.
-Re-read the document image directly to find the value for each labeled field. If it genuinely does not appear anywhere in the document, leave it as "".
-Return ONLY a JSON object: { "key_value_pairs": [ { "index": 0, "value": "string" } ] }"""
+You will be given the page images and JSON describing what's incomplete: tables with missing or
+short rows, and/or key-value pairs whose values were missed.
 
-    repair_content: list[dict[str, Any]] = [{"type": "input_text", "text": f"Key-value pairs that need correction:\n{json.dumps(pairs_to_fix, indent=2)}"}]
+For tables: re-read every row directly from the image, cell by cell, including small print in
+rate/qty/tax/amount columns. Every row array must have exactly the same length as "columns". Use ""
+only for cells that are genuinely blank in the source. Never shorten or omit a row.
 
-    needed_pages = {p["pair"].get("page") for p in pairs_to_fix if p["pair"].get("page")}
+For key-value pairs: re-read the document image directly to find the value for each labeled field.
+If it genuinely does not appear anywhere in the document, leave it as "".
+
+Return ONLY a JSON object with whichever of these keys apply:
+{ "tables": [ { "index": 0, "columns": ["string"], "rows": [["string"]] } ],
+  "key_value_pairs": [ { "index": 0, "value": "string" } ] }"""
+
+    repair_content: list[dict[str, Any]] = []
+    if tables_to_fix:
+        repair_content.append({"type": "input_text", "text": f"Tables that need correction:\n{json.dumps(tables_to_fix, indent=2)}"})
+    if pairs_to_fix:
+        repair_content.append({"type": "input_text", "text": f"Key-value pairs that need correction:\n{json.dumps(pairs_to_fix, indent=2)}"})
+
+    needed_pages = {t["table"].get("page") for t in tables_to_fix if t["table"].get("page")}
+    needed_pages |= {p["pair"].get("page") for p in pairs_to_fix if p["pair"].get("page")}
     pages_to_send = [p for p in visual_pages if p["page"] in needed_pages] if needed_pages else visual_pages[:2]
 
     for page in pages_to_send:
@@ -349,13 +321,33 @@ Return ONLY a JSON object: { "key_value_pairs": [ { "index": 0, "value": "string
 
     try:
         result = await request_structured_json(repair_prompt, repair_content, model)
+    except Exception:
+        return {}
+
+    output: dict[str, Any] = {}
+
+    if tables_to_fix:
+        fixed_tables = result.get("tables") if isinstance(result.get("tables"), list) else []
+        updated_tables = list(parsed["tables"])
+        for fixed in fixed_tables:
+            index = fixed.get("index")
+            if not isinstance(index, int) or index >= len(updated_tables):
+                continue
+            updated_tables[index] = {
+                **updated_tables[index],
+                "columns": fixed.get("columns") if isinstance(fixed.get("columns"), list) else updated_tables[index].get("columns"),
+                "rows": fixed.get("rows") if isinstance(fixed.get("rows"), list) else updated_tables[index].get("rows"),
+            }
+        output["tables"] = updated_tables
+
+    if pairs_to_fix:
         fixed_pairs = result.get("key_value_pairs") if isinstance(result.get("key_value_pairs"), list) else []
-        updated = list(parsed["key_value_pairs"])
+        updated_pairs = list(parsed["key_value_pairs"])
         for fixed in fixed_pairs:
             index = fixed.get("index")
-            if not isinstance(index, int) or index >= len(updated):
+            if not isinstance(index, int) or index >= len(updated_pairs):
                 continue
-            updated[index] = {**updated[index], "value": fixed.get("value", updated[index].get("value"))}
-        return updated
-    except Exception:
-        return None
+            updated_pairs[index] = {**updated_pairs[index], "value": fixed.get("value", updated_pairs[index].get("value"))}
+        output["key_value_pairs"] = updated_pairs
+
+    return output
